@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
-import { toCurrentUser } from "@/lib/dto";
-import MainPage from "@/components/MainPage";
+import HomeDashboard from "@/components/HomeDashboard";
+import { FeaturesSection, HeroSection } from "@/components/Landing";
 
 const AUTH_ERRORS: Record<string, string> = {
   access_denied: "Spotify login was cancelled.",
@@ -12,10 +12,12 @@ const AUTH_ERRORS: Record<string, string> = {
 export default async function Home({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const [user, { error }] = await Promise.all([getCurrentUser(), searchParams]);
 
+  if (user) return <HomeDashboard />;
+
   return (
-    <MainPage
-      user={user ? toCurrentUser(user) : null}
-      authError={error ? (AUTH_ERRORS[error] ?? AUTH_ERRORS.login_failed) : undefined}
-    />
+    <>
+      <HeroSection error={error ? (AUTH_ERRORS[error] ?? AUTH_ERRORS.login_failed) : undefined} />
+      <FeaturesSection />
+    </>
   );
 }

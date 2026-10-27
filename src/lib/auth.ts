@@ -1,6 +1,8 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
+import { cache } from "react";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { and, eq, gt } from "drizzle-orm";
 import { db } from "./db";
@@ -51,7 +53,8 @@ export async function destroySession() {
   cookieStore.delete(SESSION_COOKIE);
 }
 
-export async function getCurrentUser(): Promise<User | null> {
+// Cached so the layout and page share one lookup per request
+export const getCurrentUser = cache(async (): Promise<User | null> => {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
@@ -64,6 +67,13 @@ export async function getCurrentUser(): Promise<User | null> {
     .limit(1);
 
   return row?.user ?? null;
+});
+
+// For pages that require sign-in: sends signed-out visitors to the landing page
+export async function requireUser(): Promise<User> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/");
+  return user;
 }
 
 export function jsonError(message: string, status: number) {

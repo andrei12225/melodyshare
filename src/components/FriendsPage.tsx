@@ -256,8 +256,8 @@ export default function FriendsPage({ user }: { user: CurrentUser }) {
             {searchResults.map((user) => (
               <div key={user.id} className="flex items-center justify-between bg-zinc-800/30 p-3 rounded-lg">
                 <div className="flex items-center gap-3">
-                  <Avatar url={user.avatar_url} alt={user.username || "User"} size="sm" />
-                  <p className="text-white text-sm font-medium">{user.username}</p>
+                  <Avatar url={user.avatar_url} alt={user.full_name || user.username} size="sm" />
+                  <p className="text-white text-sm font-medium">{user.full_name || user.username}</p>
                 </div>
                 <button
                   onClick={() => sendFriendRequest(user.id)}

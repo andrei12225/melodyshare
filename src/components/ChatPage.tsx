@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { RiChat3Fill, RiSendPlaneFill, RiMusic2Fill, RiDeleteBinLine, RiArrowLeftLine } from "react-icons/ri";
 import { FaSpotify } from "react-icons/fa";
 import Avatar from "./Avatar";
@@ -15,16 +17,19 @@ const SONG_PREFIX = "SONG_SHARE::";
 
 export default function ChatPage({ user }: { user: CurrentUser }) {
   const [friends, setFriends] = useState<Profile[]>([]);
-  const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
+  // The open conversation comes from the URL: /chat/[friendId]
+  const { friendId } = useParams<{ friendId?: string }>();
+  const selectedFriendId = friendId ?? null;
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [isSongModalOpen, setIsSongModalOpen] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
+  const selectedFriend = friends.find((friend) => friend.id === selectedFriendId) ?? null;
 
   const selectedFriendIdRef = useRef<string | null>(null);
-  selectedFriendIdRef.current = selectedFriend?.id ?? null;
+  selectedFriendIdRef.current = selectedFriendId;
 
   const fetchFriends = useCallback(async (isBackground = false) => {
     if (!isBackground) setLoading(true);
@@ -57,21 +62,22 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
   }, [user.id, fetchFriends]);
 
   useEffect(() => {
-    if (selectedFriend) fetchMessages(selectedFriend.id);
-  }, [selectedFriend, fetchMessages]);
+    setMessages([]);
+    if (selectedFriendId) fetchMessages(selectedFriendId);
+  }, [selectedFriendId, fetchMessages]);
 
   useRealtimeEvent((event) => {
     if (event.type === "message") {
       const { sender_id, receiver_id } = event.message;
       const otherId = sender_id === user.id ? receiver_id : sender_id;
-      if (otherId === selectedFriend?.id) addMessage(event.message);
+      if (otherId === selectedFriendId) addMessage(event.message);
     } else if (event.type === "message_deleted") {
       setMessages((prev) => prev.filter((msg) => msg.id !== event.id));
     } else if (event.type === "friendships_changed") {
       fetchFriends(true);
     } else if (event.type === "reconnected") {
       fetchFriends(true);
-      if (selectedFriend) fetchMessages(selectedFriend.id);
+      if (selectedFriendId) fetchMessages(selectedFriendId);
     }
   });
 
@@ -169,7 +175,7 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
       {/* Sidebar: Friends List */}
       <div className={`
         w-full md:w-1/3 bg-zinc-900/50 rounded-xl p-4 flex flex-col h-full
-        ${selectedFriend ? 'hidden md:flex' : 'flex'}
+        ${selectedFriendId ? 'hidden md:flex' : 'flex'}
       `}>
         <div className="flex items-center gap-2 mb-4">
           <RiChat3Fill className="text-spotify-green text-xl" />
@@ -183,10 +189,10 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
         ) : (
           <div className="space-y-2 overflow-y-auto flex-1">
             {friends.map((friend) => (
-              <div 
+              <Link 
                 key={friend.id}
-                onClick={() => setSelectedFriend(friend)}
-                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${selectedFriend?.id === friend.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
+                href={`/chat/${friend.id}`}
+                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${selectedFriendId === friend.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
               >
                 <div className="relative">
                   <Avatar url={friend.avatar_url} alt={friend.username || "User"} size="md" />
@@ -196,7 +202,7 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
                   <p className="text-white font-medium truncate">{friend.full_name || friend.username}</p>
                   <p className="text-zinc-500 text-xs truncate">@{friend.username}</p>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}
@@ -205,18 +211,18 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
       {/* Chat Area */}
       <div className={`
         flex-1 bg-zinc-900/50 rounded-xl flex-col overflow-hidden h-full
-        ${selectedFriend ? 'flex' : 'hidden md:flex'}
+        ${selectedFriendId ? 'flex' : 'hidden md:flex'}
       `}>
         {selectedFriend ? (
           <>
             {/* Header */}
             <div className="p-4 border-b border-zinc-800 flex items-center gap-3">
-              <button 
-                onClick={() => setSelectedFriend(null)}
+              <Link 
+                href="/chat"
                 className="md:hidden text-zinc-400 hover:text-white mr-2"
               >
                 <RiArrowLeftLine size={24} />
-              </button>
+              </Link>
               <Avatar url={selectedFriend.avatar_url} alt={selectedFriend.username || "User"} size="sm" />
               <h2 className="text-white font-bold">{selectedFriend.full_name || selectedFriend.username}</h2>
             </div>
@@ -323,7 +329,16 @@ export default function ChatPage({ user }: { user: CurrentUser }) {
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-zinc-500">
             <RiChat3Fill className="text-4xl mb-4 opacity-50" />
-            <p>Select a friend to start chatting</p>
+            {!selectedFriendId ? (
+              <p>Select a friend to start chatting</p>
+            ) : loading ? (
+              <p>Loading conversation...</p>
+            ) : (
+              <>
+                <p>This conversation isn&apos;t available.</p>
+                <Link href="/chat" className="text-spotify-green text-sm mt-2 hover:underline">Back to chats</Link>
+              </>
+            )}
           </div>
         )}
       </div>
