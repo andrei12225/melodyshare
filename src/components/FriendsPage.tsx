@@ -1,17 +1,16 @@
-import { useState, useEffect } from "react";
-import { supabase } from "../supabase/client";
-import { Session } from "@supabase/supabase-js";
-import { Database } from "../lib/database.types";
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
 import { RiUserAddFill, RiUserReceivedFill, RiCheckFill, RiCloseFill, RiSearchLine, RiUser3Fill, RiUserUnfollowFill } from "react-icons/ri";
 import ConfirmationModal from "./ConfirmationModal";
 import Avatar from "./Avatar";
+import { apiFetch } from "@/lib/api-client";
+import { useRealtimeEvent } from "@/lib/realtime";
+import type { CurrentUser, FriendRequest, FriendsResponse, Profile } from "@/lib/types";
 
-type Profile = Database['public']['Tables']['profiles']['Row'];
-
-
-export default function FriendsPage({ session }: { session: Session }) {
+export default function FriendsPage({ user }: { user: CurrentUser }) {
   const [friends, setFriends] = useState<Profile[]>([]);
-  const [incomingRequests, setIncomingRequests] = useState<(Database['public']['Tables']['friendships']['Row'] & { sender: Profile })[]>([]);
+  const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([]);
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
@@ -38,15 +37,8 @@ export default function FriendsPage({ session }: { session: Session }) {
   const performSearch = async () => {
     setSearchLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .ilike('username', `%${searchTerm}%`)
-        .neq('id', session.user.id)
-        .limit(10);
-
-      if (error) throw error;
-      setSearchResults(data || []);
+      const data = await apiFetch<Profile[]>(`/api/users/search?q=${encodeURIComponent(searchTerm)}`);
+      setSearchResults(data);
     } catch (error) {
       console.error("Error searching users:", error);
     } finally {
@@ -54,91 +46,28 @@ export default function FriendsPage({ session }: { session: Session }) {
     }
   };
 
-  useEffect(() => {
-    fetchFriendsAndRequests();
-
-    // Subscribe to realtime changes for friendships
-    const channel = supabase
-      .channel('friendships_page_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'friendships',
-          // Removing specific filter to ensure we catch all events, then filtering client-side
-        },
-        (payload) => {
-           const newRecord = payload.new as any;
-           const oldRecord = payload.old as any;
-           const myId = session.user.id;
-
-           // Check if the change involves the current user
-           const involvesMe = 
-             (newRecord && (newRecord.user_id === myId || newRecord.friend_id === myId)) ||
-             (oldRecord && (oldRecord.user_id === myId || oldRecord.friend_id === myId));
-
-           if (involvesMe) {
-             fetchFriendsAndRequests();
-           }
-        }
-      )
-      .subscribe();
-
-    // Polling fallback (every 5 seconds) to ensure UI stays in sync if realtime fails
-    // Pass true for background fetch to avoid loading spinner
-    const interval = setInterval(() => fetchFriendsAndRequests(true), 5000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(interval);
-    };
-  }, [session.user.id]);
-
-  const fetchFriendsAndRequests = async (isBackground = false) => {
+  const fetchFriendsAndRequests = useCallback(async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     try {
-      // Fetch friends (accepted friendships where user is sender or receiver)
-      const { data: acceptedData, error: acceptedError } = await supabase
-        .from('friendships' as any)
-        .select(`
-          *,
-          sender:profiles!user_id(*),
-          receiver:profiles!friend_id(*)
-        `)
-        .eq('status', 'accepted')
-        .or(`user_id.eq.${session.user.id},friend_id.eq.${session.user.id}`);
-
-      if (acceptedError) throw acceptedError;
-
-      const friendsList = (acceptedData as any[]).map(f => 
-        f.user_id === session.user.id ? f.receiver : f.sender
-      ) as Profile[]; // Cast because joined profiles might be arrays or single objects depending on relationship definition, but usually single. Assuming single here. 
-      // Actually with supabase-js v2 types, relations can be tricky. Let's assume correct data structure.
-
-      // Fetch incoming requests (pending friendships where user is receiver)
-      const { data: requestsData, error: requestsError } = await supabase
-        .from('friendships' as any)
-        .select(`
-          *,
-          sender:profiles!user_id(*)
-        `)
-        .eq('friend_id', session.user.id)
-        .eq('status', 'pending');
-
-      if (requestsError) throw requestsError;
-
-      // Filter out duplicates if any (though DB constraints should prevent this)
-      const uniqueFriends = Array.from(new Map(friendsList.map(item => [item.id, item])).values());
-
-      setFriends(uniqueFriends);
-      setIncomingRequests((requestsData as any) || []); // Cast to fix type inference if needed
+      const { friends, incoming } = await apiFetch<FriendsResponse>("/api/friends");
+      setFriends(friends);
+      setIncomingRequests(incoming);
     } catch (error) {
       console.error("Error fetching friends:", error);
     } finally {
       if (!isBackground) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchFriendsAndRequests();
+  }, [user.id, fetchFriendsAndRequests]);
+
+  useRealtimeEvent((event) => {
+    if (event.type === "friendships_changed" || event.type === "reconnected") {
+      fetchFriendsAndRequests(true);
+    }
+  });
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,45 +76,19 @@ export default function FriendsPage({ session }: { session: Session }) {
 
   const sendFriendRequest = async (userId: string) => {
     try {
-      // Check if request already exists
-      const { data: existing } = await supabase
-        .from('friendships' as any)
-        .select('*')
-        .or(`and(user_id.eq.${session.user.id},friend_id.eq.${userId}),and(user_id.eq.${userId},friend_id.eq.${session.user.id})`)
-        .maybeSingle();
-
-      if (existing) {
-        showAlert("Request Exists", "Friendship or request already exists!", "info");
-        return;
-      }
-
-      const { error } = await (supabase
-        .from('friendships' as any) as any)
-        .insert({
-          user_id: session.user.id,
-          friend_id: userId,
-          status: 'pending'
-        });
-
-      if (error) throw error;
+      await apiFetch("/api/friends/requests", { method: "POST", body: JSON.stringify({ userId }) });
       showAlert("Success", "Friend request sent!", "success");
       setSearchResults([]); // Clear search to avoid spamming
       setSearchTerm("");
     } catch (error) {
       console.error("Error sending friend request:", error);
-      showAlert("Error", "Failed to send request.", "error");
+      showAlert("Error", error instanceof Error ? error.message : "Failed to send request.", "error");
     }
   };
 
   const acceptRequest = async (friendshipId: string) => {
     try {
-      const { error } = await (supabase
-        .from('friendships' as any) as any)
-        .update({ status: 'accepted' })
-        .eq('id', friendshipId);
-
-      if (error) throw error;
-      // Manually refresh to ensure UI updates even if Realtime fails
+      await apiFetch(`/api/friends/requests/${friendshipId}`, { method: "PATCH" });
       fetchFriendsAndRequests();
     } catch (error) {
       console.error("Error accepting request:", error);
@@ -194,13 +97,7 @@ export default function FriendsPage({ session }: { session: Session }) {
 
   const rejectRequest = async (friendshipId: string) => {
     try {
-      const { error } = await (supabase
-        .from('friendships' as any) as any)
-        .delete()
-        .eq('id', friendshipId);
-
-      if (error) throw error;
-      // Manually refresh to ensure UI updates even if Realtime fails
+      await apiFetch(`/api/friends/requests/${friendshipId}`, { method: "DELETE" });
       fetchFriendsAndRequests();
     } catch (error) {
       console.error("Error rejecting request:", error);
@@ -215,13 +112,8 @@ export default function FriendsPage({ session }: { session: Session }) {
     if (!friendToRemove) return;
     
     try {
-      const { error } = await supabase
-        .from('friendships' as any)
-        .delete()
-        .or(`and(user_id.eq.${session.user.id},friend_id.eq.${friendToRemove.id}),and(user_id.eq.${friendToRemove.id},friend_id.eq.${session.user.id})`);
+      await apiFetch(`/api/friends/${friendToRemove.id}`, { method: "DELETE" });
 
-      if (error) throw error;
-      
       // Manually update local state to reflect removal immediately
       setFriends(prev => prev.filter(f => f.id !== friendToRemove.id));
       fetchFriendsAndRequests(); // Full refresh to be safe

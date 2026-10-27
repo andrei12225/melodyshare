@@ -1,20 +1,19 @@
-import { useState, useEffect, useRef } from "react";
-import { supabase } from "../supabase/client";
-import { Session } from "@supabase/supabase-js";
-import { Database } from "../lib/database.types";
+"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
 import { RiChat3Fill, RiSendPlaneFill, RiMusic2Fill, RiDeleteBinLine, RiArrowLeftLine } from "react-icons/ri";
 import { FaSpotify } from "react-icons/fa";
 import Avatar from "./Avatar";
 import SongSearchModal from "./SongSearchModal";
 import ConfirmationModal from "./ConfirmationModal";
-import { SpotifyTrack } from "../spotify/api";
-
-type Profile = Database['public']['Tables']['profiles']['Row'];
-type Message = Database['public']['Tables']['messages']['Row'];
+import { SpotifyTrack } from "@/lib/spotify";
+import { apiFetch } from "@/lib/api-client";
+import { useRealtimeEvent } from "@/lib/realtime";
+import type { CurrentUser, FriendsResponse, Message, Profile } from "@/lib/types";
 
 const SONG_PREFIX = "SONG_SHARE::";
 
-export default function ChatPage({ session, accessToken }: { session: Session; accessToken?: string }) {
+export default function ChatPage({ user }: { user: CurrentUser }) {
   const [friends, setFriends] = useState<Profile[]>([]);
   const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,53 +23,57 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
   const [isSongModalOpen, setIsSongModalOpen] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
 
+  const selectedFriendIdRef = useRef<string | null>(null);
+  selectedFriendIdRef.current = selectedFriend?.id ?? null;
+
+  const fetchFriends = useCallback(async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
+    try {
+      const { friends } = await apiFetch<FriendsResponse>("/api/friends");
+      setFriends(friends);
+    } catch (error) {
+      console.error("Error fetching friends for chat:", error);
+    } finally {
+      if (!isBackground) setLoading(false);
+    }
+  }, []);
+
+  const fetchMessages = useCallback(async (friendId: string) => {
+    try {
+      const data = await apiFetch<Message[]>(`/api/messages?with=${friendId}`);
+      // Ignore the response if the user switched conversations in the meantime
+      if (selectedFriendIdRef.current === friendId) setMessages(data);
+    } catch (error) {
+      console.error("Error fetching messages:", error);
+    }
+  }, []);
+
+  const addMessage = (message: Message) => {
+    setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+  };
+
   useEffect(() => {
     fetchFriends();
-  }, [session.user.id]);
+  }, [user.id, fetchFriends]);
 
   useEffect(() => {
-    if (selectedFriend) {
-      fetchMessages(selectedFriend.id);
-      
-      const channel = supabase
-        .channel(`chat:${selectedFriend.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'messages',
-            filter: `sender_id=eq.${selectedFriend.id}`, // Listen for new messages FROM the friend
-          },
-          (payload) => {
-             const newMsg = payload.new as Message;
-             if (newMsg.sender_id === selectedFriend.id) {
-               setMessages((prev) => [...prev, newMsg]);
-             }
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'DELETE',
-            schema: 'public',
-            table: 'messages',
-            // No filter here because DELETE payload only contains ID (no sender_id),
-            // so filtering by sender_id would cause us to miss the event.
-          },
-          (payload) => {
-             const deletedMsgId = payload.old.id;
-             // Only removes if the ID exists in our current list
-             setMessages((prev) => prev.filter((msg) => msg.id !== deletedMsgId));
-          }
-        )
-        .subscribe();
+    if (selectedFriend) fetchMessages(selectedFriend.id);
+  }, [selectedFriend, fetchMessages]);
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
+  useRealtimeEvent((event) => {
+    if (event.type === "message") {
+      const { sender_id, receiver_id } = event.message;
+      const otherId = sender_id === user.id ? receiver_id : sender_id;
+      if (otherId === selectedFriend?.id) addMessage(event.message);
+    } else if (event.type === "message_deleted") {
+      setMessages((prev) => prev.filter((msg) => msg.id !== event.id));
+    } else if (event.type === "friendships_changed") {
+      fetchFriends(true);
+    } else if (event.type === "reconnected") {
+      fetchFriends(true);
+      if (selectedFriend) fetchMessages(selectedFriend.id);
     }
-  }, [selectedFriend, session.user.id]);
+  });
 
   useEffect(() => {
     scrollToBottom();
@@ -80,47 +83,13 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const fetchFriends = async () => {
-    setLoading(true);
-    try {
-      // Reuse logic from FriendsPage roughly, or make a shared hook. duplicating for speed now.
-      const { data: acceptedData } = await supabase
-        .from('friendships')
-        .select(`
-          *,
-          sender:profiles!user_id(*),
-          receiver:profiles!friend_id(*)
-        `)
-        .eq('status', 'accepted')
-        .or(`user_id.eq.${session.user.id},friend_id.eq.${session.user.id}`);
-
-      if (acceptedData) {
-        const friendsList = acceptedData.map((f: any) => 
-          f.user_id === session.user.id ? f.receiver : f.sender
-        );
-        const uniqueFriends = Array.from(new Map(friendsList.map((item: any) => [item.id, item])).values()) as Profile[];
-        setFriends(uniqueFriends);
-      }
-    } catch (error) {
-      console.error("Error fetching friends for chat:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchMessages = async (friendId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .or(`and(sender_id.eq.${session.user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${session.user.id})`)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-      setMessages(data || []);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-    }
+  const postMessage = async (content: string) => {
+    if (!selectedFriend) return;
+    const message = await apiFetch<Message>("/api/messages", {
+      method: "POST",
+      body: JSON.stringify({ receiverId: selectedFriend.id, content }),
+    });
+    addMessage(message);
   };
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -131,20 +100,7 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
     setNewMessage(""); // Optimistic clear
 
     try {
-      const { data, error } = await (supabase
-        .from('messages') as any)
-        .insert({
-          sender_id: session.user.id,
-          receiver_id: selectedFriend.id,
-          content: msgContent,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        setMessages((prev) => [...prev, data]);
-      }
+      await postMessage(msgContent);
     } catch (error) {
       console.error("Error sending message:", error);
       alert("Failed to send message");
@@ -166,20 +122,7 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
     const msgContent = `${SONG_PREFIX}${JSON.stringify(songData)}`;
     
     try {
-      const { data, error } = await (supabase
-        .from('messages') as any)
-        .insert({
-          sender_id: session.user.id,
-          receiver_id: selectedFriend.id,
-          content: msgContent,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        setMessages((prev) => [...prev, data]);
-      }
+      await postMessage(msgContent);
     } catch (error) {
       console.error("Error sending song:", error);
       alert("Failed to send song");
@@ -196,17 +139,7 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
     setMessages((prev) => prev.filter((msg) => msg.id !== messageId));
 
     try {
-      const { error, count } = await supabase
-        .from('messages')
-        .delete({ count: 'exact' })
-        .eq('id', messageId);
-
-      if (error) throw error;
-      
-      // If count is 0, it means the row wasn't deleted (likely RLS policy)
-      if (count === 0) {
-          throw new Error("Message could not be deleted. Check RLS policies.");
-      }
+      await apiFetch(`/api/messages/${messageId}`, { method: "DELETE" });
     } catch (error) {
       console.error("Error deleting message:", error);
       alert("Failed to delete message. You may not have permission.");
@@ -221,7 +154,6 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
         isOpen={isSongModalOpen} 
         onClose={() => setIsSongModalOpen(false)} 
         onSelect={handleSendSong}
-        accessToken={accessToken}
       />
       
       <ConfirmationModal
@@ -292,7 +224,7 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
               {messages.map((msg) => {
-                const isMe = msg.sender_id === session.user.id;
+                const isMe = msg.sender_id === user.id;
                 
                 const isSong = msg.content.startsWith(SONG_PREFIX);
                 let songData = null;
@@ -330,7 +262,7 @@ export default function ChatPage({ session, accessToken }: { session: Session; a
                                 </div>
                             </div>
                             <a 
-                                href={songData.uri} 
+                                href={`https://open.spotify.com/track/${encodeURIComponent(songData.id)}`}
                                 target="_blank" 
                                 rel="noreferrer"
                                 className={`flex items-center justify-center gap-2 w-full py-2 rounded-full text-xs font-bold transition-colors ${

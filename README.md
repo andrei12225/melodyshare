@@ -1,106 +1,105 @@
 # MelodyShare
 
-<p align="center">
-  <strong>MelodyShare</strong> — A desktop application for viewing your Spotify listening statistics and connecting with friends.
-</p>
+A web app for viewing your Spotify listening statistics and connecting with friends.
 
 ---
 
 ## About
 
-MelodyShare is a cross-platform desktop application that integrates with your Spotify account to provide detailed insights into your listening habits. Built with Tauri, React, and TypeScript, it offers a fast, native experience with a beautiful dark-mode interface inspired by Spotify's design language.
-
-In addition to personal stats, MelodyShare allows you to connect with friends, view their top tracks, and chat directly within the app.
+MelodyShare integrates with your Spotify account to give you insights into your listening habits: top tracks, artists and genres, recently played tracks and playlists. You can also add friends, see who's on the platform, and chat — including sharing songs straight from Spotify search.
 
 ## Features
 
-- **Personalized Dashboard**: View your top tracks, artists, and genres over customizable time ranges (4 weeks, 6 months, all time).
-- **Listening History**: Explore your recently played tracks and detailed listening statistics.
-- **Playlist Management**: Browse and manage your Spotify playlists.
-- **Friends System**: Send friend requests, accept invitations, and see what your friends are listening to.
-- **Real-time Chat**: Share songs and messages with friends directly within the app.
-- **Native Desktop Experience**: Built with Tauri for a lightweight, secure, and performant desktop application.
-- **Responsive Design**: Optimized for both desktop and mobile layouts.
+- **Personalized Dashboard**: Top tracks, artists and genres over customizable time ranges (4 weeks, 6 months, all time).
+- **Listening History**: Recently played tracks and listening statistics.
+- **Playlists**: Browse your Spotify playlists.
+- **Friends System**: Send friend requests, accept invitations and manage your friends list.
+- **Real-time Chat**: Message friends and share songs, with live updates.
+- **Responsive Design**: Works on desktop and mobile.
 
 ## Tech Stack
 
-- **Frontend**: React 19, TypeScript, Vite, TailwindCSS 4
-- **Backend**: Rust (Tauri 2)
-- **Database**: Supabase (PostgreSQL + Realtime)
-- **Authentication**: Supabase Auth (Spotify OAuth)
-- **Music Data**: Spotify Web API
+- **Framework**: Next.js 16 (App Router), React 19, TypeScript, TailwindCSS 4
+- **Database**: PostgreSQL 18 (Docker) with Drizzle ORM
+- **Authentication**: Spotify OAuth (authorization code flow), server-side sessions
+- **Realtime**: Server-Sent Events backed by Postgres `LISTEN`/`NOTIFY`
+- **Music Data**: Spotify Web API (proxied through the server; tokens never reach the browser)
 
 ## Getting Started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- [Rust](https://www.rust-lang.org/) (latest stable)
-- A [Spotify Developer](https://developer.spotify.com/) account
-- A [Supabase](https://supabase.com/) project
+- [Node.js](https://nodejs.org/) 20.9 or newer
+- [Docker](https://www.docker.com/) with Docker Compose
+- A [Spotify Developer](https://developer.spotify.com/dashboard) app
 
-### Environment Setup
+### 1. Configure Spotify
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/andrei12225/melodyshare-desktop.git
-   cd melodyshare-desktop
-   ```
+1. Create an app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) (select **Web API**).
+2. Add the redirect URI `http://127.0.0.1:3000/api/auth/callback`.
+   Spotify does not accept `localhost` redirect URIs — use the loopback IP, and open the app at `http://127.0.0.1:3000`.
+3. While the app is in development mode, add every Spotify account that should be able to sign in under **User Management**.
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
+### 2. Configure the environment
 
-3. **Configure Environment Variables**
-   
-   Create a `.env` file in the root directory:
-   ```bash
-   VITE_SUPABASE_URL=your_supabase_url
-   VITE_SUPABASE_PUB_KEY=your_supabase_public_key
-   ```
-
-4. **Set up Supabase**
-   
-   - Create a new Supabase project.
-   - Run the database migrations/schema (refer to `schema.sql` if available in older commits, or configure tables manually).
-   - Enable Row Level Security (RLS) policies for `profiles`, `messages`, and `friendships` tables.
-   - Enable Realtime for the `messages` and `friendships` tables.
-
-5. **Configure Spotify Developer**
-   - Create a new app in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
-   - Set the Redirect URI to your app's URL (e.g., `http://localhost:1420` for local development).
-   - Copy the Client ID and Client Secret.
-
-### Running the App
-
-**Development Mode**
 ```bash
-npm run tauri dev
+cp .env.example .env
 ```
 
-**Production Build**
+Fill in `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`. The Postgres defaults work out of the box.
+
+### 3. Run it
+
+**Development** (Postgres in Docker, Next.js on your machine):
+
 ```bash
-npm run tauri build
+npm install
+npm run db:up      # start Postgres
+npm run dev        # http://127.0.0.1:3000
 ```
 
-The built executable will be located in `src-tauri/target/release/`.
+**Everything in Docker:**
+
+```bash
+docker compose up -d --build   # http://127.0.0.1:3000
+```
+
+Database migrations are applied automatically when the server starts.
+
+### Database scripts
+
+| Command               | Description                                         |
+| --------------------- | --------------------------------------------------- |
+| `npm run db:up`       | Start the Postgres container                        |
+| `npm run db:down`     | Stop the containers (data is kept in a volume)      |
+| `npm run db:generate` | Generate a migration after editing `src/lib/db/schema.ts` |
+| `npm run db:migrate`  | Apply migrations manually                           |
+| `npm run db:studio`   | Open Drizzle Studio to browse the database          |
+
+To wipe the database: `docker compose down -v`.
 
 ## Project Structure
 
 ```
 melodyshare/
-├── src/                    # React frontend source
-│   ├── components/         # React components
-│   ├── lib/                # TypeScript types and utilities
-│   ├── spotify/            # Spotify API integration
-│   └── supabase/           # Supabase client configuration
-├── src-tauri/              # Rust backend source
-│   ├── src/                # Tauri application logic
-│   └── tauri.conf.json     # Tauri configuration
-├── public/                 # Static assets
-├── package.json            # Node dependencies
-└── README.md               # This file
+├── src/
+│   ├── app/                 # Next.js App Router
+│   │   ├── api/             # Route handlers (auth, friends, messages, events, Spotify proxy)
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   ├── components/          # React client components
+│   ├── lib/
+│   │   ├── db/              # Drizzle schema and client
+│   │   ├── auth.ts          # Sessions and cookies
+│   │   ├── events.ts        # Postgres LISTEN/NOTIFY fan-out
+│   │   ├── realtime.ts      # Client-side SSE hook
+│   │   ├── spotify.ts       # Client Spotify API helpers
+│   │   └── spotify-server.ts# OAuth and token refresh
+│   └── instrumentation.ts   # Runs migrations on startup
+├── drizzle/                 # SQL migrations
+├── public/                  # Static assets
+├── Dockerfile
+└── docker-compose.yml
 ```
 
 ## Contributing
@@ -110,5 +109,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - [Spotify](https://www.spotify.com/) for the Web API
-- [Supabase](https://supabase.com/) for the backend infrastructure
-- [Tauri](https://tauri.app/) for the excellent desktop framework
+- [TheAudioDB](https://www.theaudiodb.com/) for artist genre data

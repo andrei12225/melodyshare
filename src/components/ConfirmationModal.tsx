@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect } from "react";
 import { RiCloseLine } from "react-icons/ri";
 

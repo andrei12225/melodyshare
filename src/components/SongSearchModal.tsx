@@ -1,22 +1,23 @@
+"use client";
+
 import { useState, useEffect } from "react";
-import { RiCloseLine, RiSearchLine, RiMusic2Fill, RiSendPlaneFill } from "react-icons/ri";
-import { searchTracks, SpotifyTrack } from "../spotify/api";
+import { RiCloseLine, RiSearchLine, RiMusic2Fill, RiSendPlaneFill, RiLoader4Line } from "react-icons/ri";
+import { searchTracks, SpotifyTrack } from "@/lib/spotify";
 
 interface SongSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (track: SpotifyTrack) => void;
-  accessToken: string | undefined;
 }
 
-export default function SongSearchModal({ isOpen, onClose, onSelect, accessToken }: SongSearchModalProps) {
+export default function SongSearchModal({ isOpen, onClose, onSelect }: SongSearchModalProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SpotifyTrack[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const delayDebounceFn = setTimeout(() => {
-      if (query.trim() && accessToken) {
+      if (query.trim()) {
         performSearch();
       } else {
         setResults([]);
@@ -24,13 +25,12 @@ export default function SongSearchModal({ isOpen, onClose, onSelect, accessToken
     }, 500);
 
     return () => clearTimeout(delayDebounceFn);
-  }, [query, accessToken]);
+  }, [query]);
 
   const performSearch = async () => {
-    if (!accessToken) return;
     setLoading(true);
     try {
-      const data = await searchTracks(accessToken, query);
+      const data = await searchTracks(query);
       setResults(data.tracks?.items || []);
     } catch (error) {
       console.error("Error searching tracks:", error);
@@ -108,6 +108,3 @@ export default function SongSearchModal({ isOpen, onClose, onSelect, accessToken
     </div>
   );
 }
-
-// Helper needed for the loader icon if not imported
-import { RiLoader4Line } from "react-icons/ri";

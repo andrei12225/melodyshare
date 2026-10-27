@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect } from "react";
 import { RiUser3Fill } from "react-icons/ri";
 

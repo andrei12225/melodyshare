@@ -1,18 +1,21 @@
-import { ReactNode, useEffect, useState } from "react";
-import { supabase } from "../supabase/client.ts";
-import { Session } from "@supabase/supabase-js";
-import LoginButton from "./LoginButton.tsx";
+"use client";
+
+import { ReactNode, useCallback, useEffect, useState } from "react";
+import LoginButton from "./LoginButton";
 import { RiHomeFill, RiBarChartFill, RiHeartFill, RiLogoutBoxFill, RiMusic2Fill, RiCompassDiscoverFill, RiLoader4Line, RiTimeLine, RiUser3Fill, RiChat3Fill, RiMenuLine, RiCloseLine } from "react-icons/ri";
-import { getSpotifyProfile, getTopTracks, getTopArtists, getLikedSongs, getRecentlyPlayed, getUserPlaylists, formatDuration, getTimeRangeLabel, SpotifyProfile, SpotifyTrack, SpotifyArtist } from "../spotify/api.ts";
-import FriendsPage from "./FriendsPage.tsx";
-import ChatPage from "./ChatPage.tsx";
-import ToastContainer, { ToastMessage, ToastType } from "./ToastContainer.tsx";
-import Avatar from "./Avatar.tsx";
+import { getSpotifyProfile, getTopTracks, getTopArtists, getLikedSongs, getRecentlyPlayed, getUserPlaylists, formatDuration, getTimeRangeLabel, SpotifyProfile, SpotifyTrack, SpotifyArtist } from "@/lib/spotify";
+import { apiFetch } from "@/lib/api-client";
+import { useRealtimeEvent } from "@/lib/realtime";
+import type { CurrentUser, FriendsResponse } from "@/lib/types";
+import FriendsPage from "./FriendsPage";
+import ChatPage from "./ChatPage";
+import ToastContainer, { ToastMessage, ToastType } from "./ToastContainer";
+import Avatar from "./Avatar";
 
 type Page = "home" | "stats" | "friends" | "chat";
 
 interface SidebarProps {
-  session: Session | null;
+  user: CurrentUser | null;
   currentPage: Page;
   onPageChange: (page: Page) => void;
   pendingRequestsCount: number;
@@ -20,63 +23,12 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-function Sidebar({ session, currentPage, onPageChange, pendingRequestsCount, isOpen, onClose }: SidebarProps) {
-  const [userProfile, setUserProfile] = useState<{ full_name: string | null; username: string | null; avatar_url: string | null } | null>(null);
+async function signOut() {
+  await apiFetch("/api/auth/logout", { method: "POST" });
+  window.location.href = "/";
+}
 
-  useEffect(() => {
-    if (session?.user?.id) {
-      supabase
-        .from('profiles')
-        .select('full_name, username, avatar_url')
-        .eq('id', session.user.id)
-        .single()
-        .then(async ({ data, error }) => {
-          if (error) {
-            console.error("Error fetching profile:", error);
-          }
-          
-          const metadata = session.user.user_metadata;
-          const spotifyAvatar = metadata.avatar_url || metadata.picture; // Handle different metadata keys
-          const spotifyName = metadata.full_name || metadata.name;
-
-          // Using any to bypass strict type check for now on partial update
-          const profileData = data as any;
-          if (profileData) {
-            // Check if we need to sync/update profile from Spotify data
-            const updates: any = {};
-            if ((!profileData.avatar_url && spotifyAvatar)) updates.avatar_url = spotifyAvatar;
-            if ((!profileData.full_name && spotifyName)) updates.full_name = spotifyName;
-
-            if (Object.keys(updates).length > 0) {
-               await (supabase.from('profiles') as any).update(updates).eq('id', session.user.id);
-               // Update local state immediately
-               setUserProfile({ ...profileData, ...updates });
-            } else {
-               setUserProfile(profileData);
-            }
-          } else if (session.user) {
-            // Fallback for existing users without a profile row
-            const fallbackProfile = {
-              full_name: spotifyName || session.user.email,
-              username: metadata.user_name || session.user.email?.split('@')[0], // Spotify often provides user_name
-              avatar_url: spotifyAvatar
-            };
-            setUserProfile(fallbackProfile);
-            
-            // Create the missing profile row
-            supabase.from('profiles').insert({
-              id: session.user.id,
-              full_name: fallbackProfile.full_name,
-              username: fallbackProfile.username,
-              avatar_url: fallbackProfile.avatar_url
-            } as any).then(({ error: insertError }) => {
-              if (insertError) console.error("Failed to create missing profile:", insertError);
-            });
-          }
-        });
-    }
-  }, [session]);
-
+function Sidebar({ user, currentPage, onPageChange, pendingRequestsCount, isOpen, onClose }: SidebarProps) {
   return (
     <>
       {/* Mobile Overlay */}
@@ -115,14 +67,14 @@ function Sidebar({ session, currentPage, onPageChange, pendingRequestsCount, isO
             text="Stats" 
             active={currentPage === "stats"} 
             onClick={() => { onPageChange("stats"); onClose(); }}
-            disabled={!session}
+            disabled={!user}
           />
           <SidebarLink 
             icon={<RiUser3Fill />} 
             text="Friends" 
             active={currentPage === "friends"} 
             onClick={() => { onPageChange("friends"); onClose(); }}
-            disabled={!session}
+            disabled={!user}
             badge={pendingRequestsCount > 0 ? pendingRequestsCount : undefined}
           />
           <SidebarLink 
@@ -130,31 +82,31 @@ function Sidebar({ session, currentPage, onPageChange, pendingRequestsCount, isO
             text="Chat" 
             active={currentPage === "chat"} 
             onClick={() => { onPageChange("chat"); onClose(); }}
-            disabled={!session}
+            disabled={!user}
           />
         </nav>
 
-        <div className={`mt-auto pt-6 ${session ? 'border-t border-zinc-800' : ''}`}>
-          {session && userProfile ? (
+        <div className={`mt-auto pt-6 ${user ? 'border-t border-zinc-800' : ''}`}>
+          {user ? (
             <div className="mb-4 p-3 bg-zinc-900/50 rounded-lg flex items-center gap-3 group relative cursor-help">
-              <Avatar url={userProfile.avatar_url} alt="Profile" size="md" />
+              <Avatar url={user.avatar_url} alt="Profile" size="md" />
               <div className="flex-1 min-w-0">
-                <p className="text-white text-sm font-medium truncate">{userProfile.full_name || "User"}</p>
-                <p className="text-zinc-500 text-xs truncate">@{userProfile.username || "username"}</p>
+                <p className="text-white text-sm font-medium truncate">{user.full_name || "User"}</p>
+                <p className="text-zinc-500 text-xs truncate">@{user.username}</p>
               </div>
               
               {/* Tooltip */}
               <div className="absolute bottom-full left-0 w-full mb-2 p-3 bg-zinc-800 rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-zinc-700">
                 <p className="text-xs text-zinc-400 mb-1">Signed in as</p>
-                <p className="text-white text-sm font-bold truncate">{session.user.email}</p>
-                <p className="text-xs text-zinc-500 mt-2">ID: {session.user.id.slice(0, 8)}...</p>
+                <p className="text-white text-sm font-bold truncate">{user.email || user.username}</p>
+                <p className="text-xs text-zinc-500 mt-2">ID: {user.id.slice(0, 8)}...</p>
               </div>
             </div>
           ) : null}
           
-          {session && (
+          {user && (
             <button
-              onClick={() => supabase.auth.signOut()}
+              onClick={signOut}
               className="flex items-center gap-3 text-zinc-400 hover:text-white transition-colors py-2 w-full"
             >
               <RiLogoutBoxFill className="text-xl" />
@@ -189,7 +141,7 @@ function SidebarLink({ icon, text, active = false, disabled = false, badge, onCl
   );
 }
 
-function HeroSection() {
+function HeroSection({ error }: { error?: string }) {
   return (
     <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-800 to-black p-8 mb-8">
       <div className="absolute inset-0 bg-[url('/wave.svg')] opacity-5 bg-cover bg-center" />
@@ -205,6 +157,7 @@ function HeroSection() {
           <span>to get started</span>
         </div>
         <LoginButton />
+        {error && <p className="text-red-400 text-sm mt-4">{error}</p>}
       </div>
     </div>
   );
@@ -265,13 +218,19 @@ function ErrorState({ message }: { message: string }) {
 }
 
 function TrackRow({ track, index, showPlayedAt }: { track: SpotifyTrack; index: number; showPlayedAt?: string }) {
-  const albumImage = track.album?.images?.[0]?.url || "https://via.placeholder.com/64";
+  const albumImage = track.album?.images?.[0]?.url;
   const artistNames = track.artists?.map((a) => a.name).join(", ") || "Unknown Artist";
 
   return (
     <div className="flex items-center gap-4 p-3 hover:bg-zinc-800/50 rounded-lg transition-colors group">
       <span className="text-zinc-500 w-6 text-center">{index + 1}</span>
-      <img src={albumImage} alt={track.album?.name || "Album"} className="w-12 h-12 rounded" />
+      {albumImage ? (
+        <img src={albumImage} alt={track.album?.name || "Album"} className="w-12 h-12 rounded" />
+      ) : (
+        <div className="w-12 h-12 rounded bg-zinc-800 flex items-center justify-center">
+          <RiMusic2Fill className="text-zinc-500" />
+        </div>
+      )}
       <div className="flex-1 min-w-0">
         <p className="text-white font-medium truncate">{track.name}</p>
         <p className="text-zinc-400 text-sm truncate">{artistNames}</p>
@@ -285,12 +244,11 @@ function TrackRow({ track, index, showPlayedAt }: { track: SpotifyTrack; index: 
 }
 
 function ArtistCard({ artist, index }: { artist: SpotifyArtist; index: number }) {
-  const artistImage = artist.images?.[0]?.url || "https://via.placeholder.com/150";
 
   return (
     <div className="flex items-center gap-4 p-3 hover:bg-zinc-800/50 rounded-lg transition-colors">
       <span className="text-zinc-500 w-6 text-center">{index + 1}</span>
-      <img src={artistImage} alt={artist.name} className="w-14 h-14 rounded-full" />
+      <Avatar url={artist.images?.[0]?.url} alt={artist.name} size="lg" />
       <div className="flex-1 min-w-0">
         <p className="text-white font-medium truncate">{artist.name}</p>
         {artist.genres?.[0] && (
@@ -301,7 +259,7 @@ function ArtistCard({ artist, index }: { artist: SpotifyArtist; index: number })
   );
 }
 
-function HomeDashboard({ accessToken }: { accessToken: string }) {
+function HomeDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<SpotifyProfile | null>(null);
@@ -311,18 +269,16 @@ function HomeDashboard({ accessToken }: { accessToken: string }) {
   const [timeRange, setTimeRange] = useState<string>("medium_term");
 
   useEffect(() => {
-    if (!accessToken) return;
-
     async function fetchData() {
       setLoading(true);
       setError(null);
 
       try {
         const [profileData, tracksData, artistsData, likedData] = await Promise.all([
-          getSpotifyProfile(accessToken),
-          getTopTracks(accessToken, timeRange, 10),
-          getTopArtists(accessToken, timeRange, 10),
-          getLikedSongs(accessToken, 1),
+          getSpotifyProfile(),
+          getTopTracks(timeRange, 10),
+          getTopArtists(timeRange, 10),
+          getLikedSongs(1),
         ]);
         setProfile(profileData);
         setTopTracks(tracksData.items);
@@ -336,7 +292,7 @@ function HomeDashboard({ accessToken }: { accessToken: string }) {
     }
 
     fetchData();
-  }, [accessToken, timeRange]);
+  }, [timeRange]);
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
@@ -411,7 +367,7 @@ function HomeDashboard({ accessToken }: { accessToken: string }) {
   );
 }
 
-function StatsDashboard({ accessToken }: { accessToken: string }) {
+function StatsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [recentTracks, setRecentTracks] = useState<{ played_at: string; track: SpotifyTrack }[]>([]);
@@ -419,17 +375,15 @@ function StatsDashboard({ accessToken }: { accessToken: string }) {
   const [topArtists, setTopArtists] = useState<SpotifyArtist[]>([]);
 
   useEffect(() => {
-    if (!accessToken) return;
-
     async function fetchData() {
       setLoading(true);
       setError(null);
 
       try {
         const [recentData, playlistsData, artistsData] = await Promise.all([
-          getRecentlyPlayed(accessToken, 50),
-          getUserPlaylists(accessToken, 20),
-          getTopArtists(accessToken, "medium_term", 10),
+          getRecentlyPlayed(50),
+          getUserPlaylists(20),
+          getTopArtists("medium_term", 10),
         ]);
         setRecentTracks(recentData.items);
         setPlaylists(playlistsData);
@@ -442,7 +396,7 @@ function StatsDashboard({ accessToken }: { accessToken: string }) {
     }
 
     fetchData();
-  }, [accessToken]);
+  }, []);
 
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} />;
@@ -625,122 +579,58 @@ function StatsDashboard({ accessToken }: { accessToken: string }) {
 }
 
 interface MainPageProps {
-  session: Session | null;
-  spotifyToken?: string | null;
+  user: CurrentUser | null;
+  authError?: string;
 }
 
-export default function MainPage({ session, spotifyToken }: MainPageProps) {
+export default function MainPage({ user, authError }: MainPageProps) {
   const [currentPage, setCurrentPage] = useState<Page>("home");
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const accessToken = session?.provider_token || spotifyToken;
 
-  const addToast = (title: string, message: string, type: ToastType = "info") => {
+  const addToast = useCallback((title: string, message: string, type: ToastType = "info") => {
     const id = Math.random().toString(36).substring(7);
     setToasts((prev) => [...prev, { id, title, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
-  };
+  }, []);
 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const fetchPendingRequests = async (isPolling = false) => {
-    if (!session?.user?.id) return;
+  const fetchPendingRequests = useCallback(async () => {
+    if (!user) return;
     try {
-      const { count, error } = await supabase
-        .from('friendships')
-        .select('id', { count: 'exact', head: true })
-        .eq('friend_id', session.user.id)
-        .eq('status', 'pending');
-      
-      if (!error && count !== null) {
-        setPendingRequestsCount(prev => {
-          if (isPolling && count > prev) {
-             addToast("New Request", "You have a new friend request!", "info");
-             const audio = new Audio('/notification.mp3');
-             audio.play().catch(() => {});
-          }
-          return count;
-        });
-      }
+      const { incoming } = await apiFetch<FriendsResponse>("/api/friends");
+      setPendingRequestsCount(incoming.length);
     } catch (err) {
       console.error("Error fetching requests count:", err);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
-    if (!session?.user?.id) return;
-
     fetchPendingRequests();
+  }, [fetchPendingRequests]);
 
-    // Subscribe to realtime changes for friend requests
-    const channel = supabase
-      .channel('global_friendships')
-      .on(
-        'postgres_changes',
-        {
-          event: '*', // Listen to ALL events (INSERT, UPDATE, DELETE)
-          schema: 'public',
-          table: 'friendships',
-        },
-        async (payload) => {
-          const newRecord = payload.new as any;
-          const oldRecord = payload.old as any;
-          const myId = session.user.id;
-          
-          // Check if I am involved as the receiver (friend_id)
-          // We care if:
-          // 1. New request sent TO me (INSERT)
-          // 2. Request TO me was Accepted/Rejected (UPDATE/DELETE)
-          
-          const involvedAsReceiver = 
-            (newRecord && newRecord.friend_id === myId) || 
-            (oldRecord && oldRecord.friend_id === myId);
-
-          if (involvedAsReceiver) {
-             // Handle Toast for New Requests
-             if (payload.eventType === 'INSERT' && newRecord.status === 'pending') {
-                 try {
-                   const { data: sender } = await supabase
-                     .from('profiles')
-                     .select('username')
-                     .eq('id', newRecord.user_id)
-                     .single();
-
-                   const senderName = (sender as any)?.username || "Someone";
-                   addToast("New Friend Request", `${senderName} sent you a friend request!`, "success");
-                   
-                   const audio = new Audio('/notification.mp3');
-                   audio.play().catch(() => {});
-                 } catch (err) {
-                   console.error("Error handling notification:", err);
-                 }
-             }
-             
-             // Always refresh count for any relevant change
-             fetchPendingRequests();
-          }
-        }
-      )
-      .subscribe();
-
-    // Polling fallback (every 10 seconds for robustness)
-    const interval = setInterval(() => fetchPendingRequests(true), 10000);
-
-    return () => {
-      supabase.removeChannel(channel);
-      clearInterval(interval);
-    };
-  }, [session?.user?.id]);
+  useRealtimeEvent((event) => {
+    if (event.type === "friend_request") {
+      const senderName = event.from.full_name || event.from.username;
+      addToast("New Friend Request", `${senderName} sent you a friend request!`, "success");
+      const audio = new Audio('/notification.mp3');
+      audio.play().catch(() => {});
+    }
+    if (event.type === "friendships_changed" || event.type === "reconnected") {
+      fetchPendingRequests();
+    }
+  }, !!user);
 
   return (
     <div className="min-h-screen bg-black">
       <Sidebar 
-        session={session} 
+        user={user} 
         currentPage={currentPage} 
         onPageChange={setCurrentPage} 
         pendingRequestsCount={pendingRequestsCount}
@@ -766,24 +656,19 @@ export default function MainPage({ session, spotifyToken }: MainPageProps) {
         </div>
 
         <div className="max-w-5xl mx-auto">
-          {!session ? (
+          {!user ? (
             <>
-              <HeroSection />
+              <HeroSection error={authError} />
               <FeaturesSection />
             </>
-          ) : !accessToken ? (
-            <div className="flex flex-col items-center justify-center py-16">
-              <p className="text-zinc-400 mb-4">Loading your session...</p>
-              <p className="text-zinc-500 text-sm">If this persists, try logging out and logging back in.</p>
-            </div>
           ) : currentPage === "home" ? (
-            <HomeDashboard accessToken={accessToken} />
+            <HomeDashboard />
           ) : currentPage === "stats" ? (
-            <StatsDashboard accessToken={accessToken} />
+            <StatsDashboard />
           ) : currentPage === "friends" ? (
-            <FriendsPage session={session} />
+            <FriendsPage user={user} />
           ) : (
-            <ChatPage session={session} accessToken={accessToken || undefined} />
+            <ChatPage user={user} />
           )}
         </div>
       </main>
